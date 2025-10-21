@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_VERSION = "4.1 (Cleaned Paths)"
+SCRIPT_VERSION = "4.2 (Simplified Context)"
 DOCKER_BASE_IMAGE = "python:3.11-slim"
 CONTAINER_NAME = "deepseek-ocr-container"
 TROUBLESHOOT_IMAGE_NAME = "deepseek-ocr-vllm:troubleshoot"
@@ -60,13 +60,15 @@ set -x
 echo "Installation script completed successfully."
 """
     output_sh_path.write_text(script_content)
-    output_sh_path.chmod(0o755)  # Make the script executable
+    output_sh_path.chmod(0o755)
     logging.info("Install script created successfully.")
 
 
-def create_run_script(output_sh_path: Path, model_dir_name: str, port: int):
+def create_run_script(output_sh_path: Path, model_dir: str, port: int):
     """Creates the script to run the vLLM server."""
     logging.info(f"Generating run script at '{output_sh_path}'...")
+    # Use a relative path for the model directory inside the container
+    model_path_in_container = Path(model_dir).name
     script_content = f"""#!/bin/bash
 set -x
 
@@ -75,20 +77,21 @@ source /app/vllm_source/myenv/bin/activate
 
 # Start the server
 python -m vllm.entrypoints.openai.api_server \\
-    --model "/app/{model_dir_name}" \\
+    --model "/app/{model_path_in_container}" \\
     --host "0.0.0.0" \\
     --port "{port}" \\
     --tensor-parallel-size 1 \\
     --enforce-eager
 """
     output_sh_path.write_text(script_content)
-    output_sh_path.chmod(0o755)  # Make the script executable
+    output_sh_path.chmod(0o755)
     logging.info("Run script created successfully.")
 
 
-def create_dockerfile(dockerfile_path: Path, model_dir_name: str, install_script_name: str, run_script_name: str):
-    """Generates a simplified Dockerfile that executes the install script."""
+def create_dockerfile(dockerfile_path: Path, model_dir: str, install_script_name: str, run_script_name: str):
+    """Generates a simplified Dockerfile with a clean build context."""
     logging.info(f"Creating Dockerfile at '{dockerfile_path}'...")
+    model_dir_path = Path(model_dir)
     dockerfile_content = f"""
 FROM {DOCKER_BASE_IMAGE}
 
@@ -102,16 +105,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
 
 WORKDIR /app
 
-# Copy the model files first (if they exist)
-# The COPY command doesn't fail if the source is missing, which is fine.
-COPY ./{model_dir_name} /app/{model_dir_name}
+# Copy the model files, install script, and run script
+# The build context is the project root, so these paths are simple and reliable
+COPY {model_dir_path.name} /app/{model_dir_path.name}
+COPY {install_script_name} /app/{install_script_name}
+COPY {run_script_name} /app/{run_script_name}
 
-# Copy the generated install and run scripts
-COPY ./{install_script_name} /app/{install_script_name}
-COPY ./{run_script_name} /app/{run_script_name}
+# Make scripts executable inside the container
+RUN chmod +x /app/{install_script_name} /app/{run_script_name}
 
 # Run the installation script
-# This is now the main build step
 RUN ./{install_script_name}
 
 # Expose the port and set the run script as the default command
@@ -126,8 +129,8 @@ def main():
     parser = argparse.ArgumentParser(
         description=f"Deploy DeepSeek-OCR with vLLM on CPU using Docker. Version: {SCRIPT_VERSION}"
     )
-    parser.add_argument("--model-dir", type=str, default="./model_data",
-                        help="Directory for model weights and build artifacts.")
+    # The --model-dir argument now refers to a directory relative to the script
+    parser.add_argument("--model-dir", type=str, default="model_data", help="Directory for model weights.")
     parser.add_argument("--port", type=int, default=8000, help="API port on the host.")
     parser.add_argument("--image-name", type=str, default="deepseek-ocr-vllm:latest", help="Name for the Docker image.")
     parser.add_argument("--troubleshoot", action="store_true", help="If build fails, tag the last layer for debugging.")
@@ -135,34 +138,30 @@ def main():
 
     logging.info(f"--- DeepSeek-OCR Deployment Scripter v{SCRIPT_VERSION} ---")
 
-    # --- Path Definitions ---
-    # The script's own directory
+    # All paths are now relative to the script's directory
     script_dir = Path(__file__).resolve().parent
-    # The source for build commands is next to the script
     install_commands_path = script_dir / INSTALL_COMMANDS_FILENAME
+    install_script_path = script_dir / "install_vllm.sh"
+    run_script_path = script_dir / "run_model.sh"
+    dockerfile_path = script_dir / "Dockerfile"
+    model_weights_dir = script_dir / args.model_dir
 
-    # The output/build directory
-    base_dir = Path(args.model_dir).resolve()
-    base_dir.mkdir(exist_ok=True)
-
-    # Generated scripts and Dockerfile go into the build directory
-    install_script_path = base_dir / "install_vllm.sh"
-    run_script_path = base_dir / "run_model.sh"
-    dockerfile_path = base_dir / "Dockerfile"
-    model_weights_dir = base_dir / "model_weights"
+    # Ensure model directory exists but don't handle download here.
+    # User is responsible for placing model weights in the specified directory.
+    model_weights_dir.mkdir(exist_ok=True)
 
     try:
-        # Step 1: Generate scripts from templates/commands
         create_install_script(install_commands_path, install_script_path)
-        create_run_script(run_script_path, model_weights_dir.name, args.port)
-        create_dockerfile(dockerfile_path, model_weights_dir.name, install_script_path.name, run_script_path.name)
+        create_run_script(run_script_path, args.model_dir, args.port)
+        create_dockerfile(dockerfile_path, args.model_dir, install_script_path.name, run_script_path.name)
 
-        # Step 2: Build the Docker image
         logging.info(f"Building Docker image '{args.image_name}'...")
+        # Build context is now the script's directory
         build_command = ["docker", "build", "--progress=plain", "-t", args.image_name, "."]
 
         try:
-            run_command(build_command, cwd=str(base_dir))
+            # The cwd is now the script's directory, providing a clean build context
+            run_command(build_command, cwd=str(script_dir))
             logging.info("Docker image built successfully.")
         except subprocess.CalledProcessError:
             logging.error("Docker build failed.")
@@ -178,14 +177,14 @@ def main():
                     print("TROUBLESHOOTING SHELL READY")
                     print(f"To debug, run this command to get a shell inside the container:")
                     print(f"  docker run -it --entrypoint /bin/bash {TROUBLESHOOT_IMAGE_NAME}")
-                    print("\nThen, inside the shell, you can manually run the install script:")
-                    print("  ./install_vllm.sh")
+                    print("\nThen, inside the shell, you can find and run the install script:")
+                    print("  ls -l /app")
+                    print("  /app/install_vllm.sh")
                     print("=" * 80 + "\n")
                 else:
                     logging.error("Could not find a dangling image to tag for troubleshooting.")
             sys.exit(1)
 
-        # Step 3: Deploy the container
         logging.info(f"Stopping and removing any existing container named '{CONTAINER_NAME}'...")
         subprocess.run(["docker", "stop", CONTAINER_NAME], capture_output=True, text=True)
         subprocess.run(["docker", "rm", CONTAINER_NAME], capture_output=True, text=True)
@@ -210,8 +209,18 @@ def main():
         logging.info(f"Container is running. API should be available at http://localhost:{args.port}")
 
     except Exception as e:
-        logging.error(f"An unexpected error occurred: {e}")
+        logging.error(f"An unexpected error occurred: {e}", exc_info=True)
         sys.exit(1)
+    finally:
+        # Clean up generated files
+        logging.info("Cleaning up generated script files and Dockerfile...")
+        if install_script_path.exists():
+            install_script_path.unlink()
+        if run_script_path.exists():
+            run_script_path.unlink()
+        if dockerfile_path.exists():
+            dockerfile_path.unlink()
+        logging.info("Cleanup complete.")
 
 
 if __name__ == "__main__":
