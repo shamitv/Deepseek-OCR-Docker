@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_VERSION = "2.1"
+SCRIPT_VERSION = "2.2"
 MODEL_ID = "deepseek-ai/DeepSeek-OCR"
 VLLM_REPO = "https://github.com/vllm-project/vllm.git"
 DOCKER_BASE_IMAGE = "ubuntu:22.04"
@@ -73,7 +73,7 @@ def download_model(model_weights_dir: Path):
 
 def create_dockerfile(dockerfile_path: Path, vllm_source_dir_name: str, model_weights_dir_name: str, api_port: int):
     """
-    Generates the Dockerfile for the CPU build, including all necessary build tools.
+    Generates the Dockerfile for the CPU build with all necessary build flags.
     """
     logging.info(f"Creating Dockerfile at '{dockerfile_path}' (Version: {SCRIPT_VERSION})")
 
@@ -82,7 +82,7 @@ def create_dockerfile(dockerfile_path: Path, vllm_source_dir_name: str, model_we
 FROM {DOCKER_BASE_IMAGE} AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies, including C++ compiler (build-essential)
+# Install all build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     git \\
     build-essential \\
@@ -96,15 +96,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
 RUN python3.11 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# CRITICAL STEP: Install the correct CPU version of PyTorch first
+# Install the correct CPU version of PyTorch first
 RUN pip install --no-cache-dir torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
 
 # Copy vLLM source code
 COPY ./{vllm_source_dir_name} /app/vllm
 WORKDIR /app/vllm
 
-# Now, install vLLM for CPU. It will use the pre-installed torch and C++ compiler.
-RUN VLLM_TARGET_DEVICE=cpu pip install -e .
+# Install vLLM, explicitly disabling CUDA and setting the target to CPU
+RUN VLLM_TARGET_DEVICE=cpu USE_CUDA=0 pip install -e .
 
 # Stage 2: Final Image
 FROM {DOCKER_BASE_IMAGE}
