@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_VERSION = "1.4"
+SCRIPT_VERSION = "1.5"
 MODEL_ID = "deepseek-ai/DeepSeek-OCR"
 VLLM_REPO = "https://github.com/vllm-project/vllm.git"
 DOCKER_BASE_IMAGE = "ubuntu:22.04"
@@ -110,7 +110,8 @@ COPY ./{vllm_source_dir_name} /app/{vllm_source_dir_name}
 WORKDIR /app/{vllm_source_dir_name}
 
 # Build and install vLLM for CPU
-# It will use the pre-installed torch version and python dev headers
+# Set USE_CUDA=0 to explicitly disable GPU checks during the build
+ENV USE_CUDA=0
 RUN VLLM_TARGET_DEVICE=cpu MAX_JOBS=$(nproc) pip install --no-cache-dir -e .
 
 # Stage 2: Final Image
