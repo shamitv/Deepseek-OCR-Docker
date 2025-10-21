@@ -6,11 +6,11 @@ import sys
 from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_VERSION = "4.0 (Shell-Based)"
+SCRIPT_VERSION = "4.1 (Cleaned Paths)"
 DOCKER_BASE_IMAGE = "python:3.11-slim"
 CONTAINER_NAME = "deepseek-ocr-container"
 TROUBLESHOOT_IMAGE_NAME = "deepseek-ocr-vllm:troubleshoot"
-INSTALL_COMMANDS_FILE = "command_vllm_install.txt"
+INSTALL_COMMANDS_FILENAME = "command_vllm_install.txt"
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -42,8 +42,9 @@ def run_command(command, cwd=None, raise_on_error=True):
 def create_install_script(source_txt_path: Path, output_sh_path: Path):
     """Reads commands from a text file and creates an executable shell script."""
     logging.info(f"Generating install script at '{output_sh_path}' from '{source_txt_path}'...")
-    if not source_txt_path.exists():
+    if not source_txt_path.is_file():
         logging.error(f"FATAL: Installation command file not found at '{source_txt_path}'")
+        logging.error("Please create this file in the same directory as the deploy script.")
         sys.exit(1)
 
     with open(source_txt_path, 'r') as f:
@@ -101,7 +102,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
 
 WORKDIR /app
 
-# Copy the model files first
+# Copy the model files first (if they exist)
+# The COPY command doesn't fail if the source is missing, which is fine.
 COPY ./{model_dir_name} /app/{model_dir_name}
 
 # Copy the generated install and run scripts
@@ -133,14 +135,21 @@ def main():
 
     logging.info(f"--- DeepSeek-OCR Deployment Scripter v{SCRIPT_VERSION} ---")
 
+    # --- Path Definitions ---
+    # The script's own directory
+    script_dir = Path(__file__).resolve().parent
+    # The source for build commands is next to the script
+    install_commands_path = script_dir / INSTALL_COMMANDS_FILENAME
+
+    # The output/build directory
     base_dir = Path(args.model_dir).resolve()
     base_dir.mkdir(exist_ok=True)
 
-    install_commands_path = base_dir / INSTALL_COMMANDS_FILE
+    # Generated scripts and Dockerfile go into the build directory
     install_script_path = base_dir / "install_vllm.sh"
     run_script_path = base_dir / "run_model.sh"
     dockerfile_path = base_dir / "Dockerfile"
-    model_weights_dir = base_dir / "model_weights"  # Assuming model weights are here
+    model_weights_dir = base_dir / "model_weights"
 
     try:
         # Step 1: Generate scripts from templates/commands
@@ -159,7 +168,6 @@ def main():
             logging.error("Docker build failed.")
             if args.troubleshoot:
                 logging.warning("Entering troubleshoot mode.")
-                # Find the most recent dangling image (the last successful layer)
                 result = subprocess.run('docker images -q --filter dangling=true', capture_output=True, text=True,
                                         shell=True)
                 image_id = result.stdout.strip().split('\n')[0] if result.stdout else None
@@ -186,12 +194,11 @@ def main():
         run_command([
             "docker", "run", "-d", "-p", f"{args.port}:{args.port}",
             "--name", CONTAINER_NAME, args.image_name
-        ], raise_on_error=False)  # Don't fail script if container exits immediately
+        ], raise_on_error=False)
 
         logging.info("Deployment command sent. Waiting 10 seconds to check container status...")
         time.sleep(10)
 
-        # Check if the container is still running
         result = subprocess.run(f"docker ps -q --filter name={CONTAINER_NAME}", capture_output=True, text=True,
                                 shell=True)
         if not result.stdout.strip():
