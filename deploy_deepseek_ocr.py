@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_VERSION = "3.3 (Final)"
+SCRIPT_VERSION = "3.4 (Final, Debuggable Runtime)"
 MODEL_ID = "deepseek-ai/DeepSeek-OCR"
 VLLM_REPO = "https://github.com/vllm-project/vllm.git"
 DOCKER_BASE_IMAGE = "python:3.11-slim"
@@ -103,8 +103,7 @@ RUN pip install --no-cache-dir build
 # Copy vLLM source code
 COPY ./{vllm_source_dir_name} .
 
-# REVERT TO OFFICIAL METHOD: Install Python dependencies using the requirements file
-# This was the key discovery from the manual build process that worked.
+# Install Python dependencies using the official requirements file
 RUN pip install --no-cache-dir -r requirements/cpu-build.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Build the wheel using the official method
@@ -115,12 +114,11 @@ FROM {DOCKER_BASE_IMAGE}
 
 WORKDIR /app
 
-# Copy the built wheel and its installed dependencies from the builder stage
-# Copying site-packages brings all dependencies like torch, torchvision, etc.
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+# Copy the installed Python packages from the builder stage
+COPY --from-builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 
 # Copy the vLLM wheel
-COPY --from=builder /app/dist/*.whl /app/wheel/
+COPY --from-builder /app/dist/*.whl /app/wheel/
 
 # Install the built vLLM wheel
 RUN pip install --no-cache-dir /app/wheel/*.whl
@@ -287,8 +285,9 @@ def main():
         subprocess.run(["docker", "rm", CONTAINER_NAME], capture_output=True, text=True)
 
         logging.info(f"Starting Docker container '{CONTAINER_NAME}'...")
+        # CRITICAL FIX: Removed the --rm flag to allow inspection of failed containers
         run_command([
-            "docker", "run", "--rm", "-d",
+            "docker", "run", "-d",
             "-p", f"{args.port}:{args.port}",
             "--name", CONTAINER_NAME,
             args.image_name
