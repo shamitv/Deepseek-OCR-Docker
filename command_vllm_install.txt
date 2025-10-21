@@ -1,0 +1,17 @@
+cd app
+git clone https://github.com/vllm-project/vllm.git vllm_source
+cd vllm_source
+update ; apt upgrade -y
+apt install git libnuma-dev -y
+python -m venv myenv
+source myenv/bin/activate
+pip install --upgrade pip
+git clone https://github.com/vllm-project/vllm.git vllm_source
+cd vllm_source
+pip install --upgrade pip
+pip install -v -r requirements/cpu-build.txt --extra-index-url https://download.pytorch.org/whl/cpu
+pip install -v -r requirements/cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu
+VLLM_TARGET_DEVICE=cpu python -m build --wheel --no-isolation
+pip install build
+VLLM_TARGET_DEVICE=cpu python -m build --wheel --no-isolation
+pip install dist/*.whl
