@@ -7,7 +7,7 @@ from datetime import time
 from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_VERSION = "4.2 (Simplified Context)"
+SCRIPT_VERSION = "4.3 (Final Fix)"
 DOCKER_BASE_IMAGE = "python:3.11-slim"
 CONTAINER_NAME = "deepseek-ocr-container"
 TROUBLESHOOT_IMAGE_NAME = "deepseek-ocr-vllm:troubleshoot"
@@ -68,7 +68,6 @@ echo "Installation script completed successfully."
 def create_run_script(output_sh_path: Path, model_dir: str, port: int):
     """Creates the script to run the vLLM server."""
     logging.info(f"Generating run script at '{output_sh_path}'...")
-    # Use a relative path for the model directory inside the container
     model_path_in_container = Path(model_dir).name
     script_content = f"""#!/bin/bash
 set -x
@@ -90,7 +89,7 @@ python -m vllm.entrypoints.openai.api_server \\
 
 
 def create_dockerfile(dockerfile_path: Path, model_dir: str, install_script_name: str, run_script_name: str):
-    """Generates a simplified Dockerfile with a clean build context."""
+    """Generates a simplified Dockerfile with the corrected dependencies."""
     logging.info(f"Creating Dockerfile at '{dockerfile_path}'...")
     model_dir_path = Path(model_dir)
     dockerfile_content = f"""
@@ -98,16 +97,14 @@ FROM {DOCKER_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install base dependencies required by the install script
+# Install only git. The python base image already has venv.
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     git \\
-    python3.11-venv \\
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy the model files, install script, and run script
-# The build context is the project root, so these paths are simple and reliable
 COPY {model_dir_path.name} /app/{model_dir_path.name}
 COPY {install_script_name} /app/{install_script_name}
 COPY {run_script_name} /app/{run_script_name}
@@ -130,7 +127,6 @@ def main():
     parser = argparse.ArgumentParser(
         description=f"Deploy DeepSeek-OCR with vLLM on CPU using Docker. Version: {SCRIPT_VERSION}"
     )
-    # The --model-dir argument now refers to a directory relative to the script
     parser.add_argument("--model-dir", type=str, default="model_data", help="Directory for model weights.")
     parser.add_argument("--port", type=int, default=8000, help="API port on the host.")
     parser.add_argument("--image-name", type=str, default="deepseek-ocr-vllm:latest", help="Name for the Docker image.")
@@ -139,7 +135,6 @@ def main():
 
     logging.info(f"--- DeepSeek-OCR Deployment Scripter v{SCRIPT_VERSION} ---")
 
-    # All paths are now relative to the script's directory
     script_dir = Path(__file__).resolve().parent
     install_commands_path = script_dir / INSTALL_COMMANDS_FILENAME
     install_script_path = script_dir / "install_vllm.sh"
@@ -147,8 +142,6 @@ def main():
     dockerfile_path = script_dir / "Dockerfile"
     model_weights_dir = script_dir / args.model_dir
 
-    # Ensure model directory exists but don't handle download here.
-    # User is responsible for placing model weights in the specified directory.
     model_weights_dir.mkdir(exist_ok=True)
 
     try:
@@ -157,11 +150,9 @@ def main():
         create_dockerfile(dockerfile_path, args.model_dir, install_script_path.name, run_script_path.name)
 
         logging.info(f"Building Docker image '{args.image_name}'...")
-        # Build context is now the script's directory
         build_command = ["docker", "build", "--progress=plain", "-t", args.image_name, "."]
 
         try:
-            # The cwd is now the script's directory, providing a clean build context
             run_command(build_command, cwd=str(script_dir))
             logging.info("Docker image built successfully.")
         except subprocess.CalledProcessError:
@@ -213,7 +204,6 @@ def main():
         logging.error(f"An unexpected error occurred: {e}", exc_info=True)
         sys.exit(1)
     finally:
-        # Clean up generated files
         logging.info("Cleaning up generated script files and Dockerfile...")
         if install_script_path.exists():
             install_script_path.unlink()

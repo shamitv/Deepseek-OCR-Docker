@@ -1,17 +1,29 @@
-cd app
-git clone https://github.com/vllm-project/vllm.git vllm_source
-cd vllm_source
-update ; apt upgrade -y
-apt install git libnuma-dev -y
+# This file contains the shell commands to build and install vLLM.
+
+# 1. Update system and install dependencies
+apt-get update
+apt-get install -y build-essential libnuma-dev
+
+# 2. Create a directory for the source code and move into it
+mkdir -p /app/vllm_source
+cd /app/vllm_source
+
+# 3. Clone the vLLM repository into the current directory
+git clone https://github.com/vllm-project/vllm.git .
+
+# 4. Create and activate a Python virtual environment
 python -m venv myenv
 source myenv/bin/activate
+
+# 5. Upgrade pip and install the 'build' package
 pip install --upgrade pip
-git clone https://github.com/vllm-project/vllm.git vllm_source
-cd vllm_source
-pip install --upgrade pip
-pip install -v -r requirements/cpu-build.txt --extra-index-url https://download.pytorch.org/whl/cpu
-pip install -v -r requirements/cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu
-VLLM_TARGET_DEVICE=cpu python -m build --wheel --no-isolation
 pip install build
+
+# 6. Install Python dependencies using the official requirements file
+pip install -r requirements/cpu-build.txt --extra-index-url https://download.pytorch.org/whl/cpu
+
+# 7. Build the vLLM wheel
 VLLM_TARGET_DEVICE=cpu python -m build --wheel --no-isolation
+
+# 8. Install the wheel you just built
 pip install dist/*.whl
