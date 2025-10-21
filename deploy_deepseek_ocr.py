@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_VERSION = "1.3"
+SCRIPT_VERSION = "1.4"
 MODEL_ID = "deepseek-ai/DeepSeek-OCR"
 VLLM_REPO = "https://github.com/vllm-project/vllm.git"
 DOCKER_BASE_IMAGE = "ubuntu:22.04"
@@ -83,19 +83,24 @@ FROM {DOCKER_BASE_IMAGE} AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies
+# Install build dependencies, including python development headers and ninja
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     git \\
     python3.11 \\
+    python3.11-dev \\
     python3.11-venv \\
     python3-pip \\
     cmake \\
     build-essential \\
+    ninja-build \\
     && rm -rf /var/lib/apt/lists/*
 
 # Create and activate a virtual environment
 RUN python3.11 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+
+# Install numpy, which is needed by torch setup
+RUN pip install --no-cache-dir numpy
 
 # Install the specific PyTorch version required by vLLM for CPU
 RUN pip install --no-cache-dir torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
@@ -105,7 +110,7 @@ COPY ./{vllm_source_dir_name} /app/{vllm_source_dir_name}
 WORKDIR /app/{vllm_source_dir_name}
 
 # Build and install vLLM for CPU
-# It will use the pre-installed torch version
+# It will use the pre-installed torch version and python dev headers
 RUN VLLM_TARGET_DEVICE=cpu MAX_JOBS=$(nproc) pip install --no-cache-dir -e .
 
 # Stage 2: Final Image
