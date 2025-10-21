@@ -9,7 +9,8 @@ mkdir -p /app/vllm_source
 cd /app/vllm_source
 
 # 3. Clone the vLLM repository into the current directory
-git clone https://github.com/vllm-project/vllm.git .
+git clone https://github.com/vllm-project/vllm.git vllm_source
+cd vllm_source
 
 # 4. Create and activate a Python virtual environment
 python -m venv myenv
