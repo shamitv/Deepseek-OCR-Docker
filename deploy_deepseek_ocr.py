@@ -3,11 +3,11 @@ import logging
 import os
 import subprocess
 import sys
-import time
+import time  # <--- FIX: Added the missing import
 from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_VERSION = "4.3 (Final Fix)"
+SCRIPT_VERSION = "4.4 (Import Fix)"
 DOCKER_BASE_IMAGE = "python:3.11-slim"
 CONTAINER_NAME = "deepseek-ocr-container"
 TROUBLESHOOT_IMAGE_NAME = "deepseek-ocr-vllm:troubleshoot"
