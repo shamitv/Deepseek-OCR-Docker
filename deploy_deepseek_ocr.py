@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_VERSION = "2.2"
+SCRIPT_VERSION = "2.3"
 MODEL_ID = "deepseek-ai/DeepSeek-OCR"
 VLLM_REPO = "https://github.com/vllm-project/vllm.git"
 DOCKER_BASE_IMAGE = "ubuntu:22.04"
@@ -73,7 +73,7 @@ def download_model(model_weights_dir: Path):
 
 def create_dockerfile(dockerfile_path: Path, vllm_source_dir_name: str, model_weights_dir_name: str, api_port: int):
     """
-    Generates the Dockerfile for the CPU build with all necessary build flags.
+    Generates the definitive Dockerfile for the CPU build, combining all learned fixes.
     """
     logging.info(f"Creating Dockerfile at '{dockerfile_path}' (Version: {SCRIPT_VERSION})")
 
@@ -82,10 +82,15 @@ def create_dockerfile(dockerfile_path: Path, vllm_source_dir_name: str, model_we
 FROM {DOCKER_BASE_IMAGE} AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install all build dependencies
+# Set USE_CUDA=0 globally for this entire build stage
+ENV USE_CUDA=0
+
+# Install all necessary build dependencies, including the full C++ toolchain
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     git \\
     build-essential \\
+    cmake \\
+    ninja-build \\
     python3.11 \\
     python3.11-dev \\
     python3.11-venv \\
@@ -103,8 +108,8 @@ RUN pip install --no-cache-dir torch==2.8.0 --index-url https://download.pytorch
 COPY ./{vllm_source_dir_name} /app/vllm
 WORKDIR /app/vllm
 
-# Install vLLM, explicitly disabling CUDA and setting the target to CPU
-RUN VLLM_TARGET_DEVICE=cpu USE_CUDA=0 pip install -e .
+# Install vLLM. The build system will inherit USE_CUDA=0 from the stage ENV.
+RUN VLLM_TARGET_DEVICE=cpu pip install -e .
 
 # Stage 2: Final Image
 FROM {DOCKER_BASE_IMAGE}
