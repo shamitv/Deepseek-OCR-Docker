@@ -7,10 +7,9 @@ import time
 from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_VERSION = "2.6"
+SCRIPT_VERSION = "2.7 (Final)"
 MODEL_ID = "deepseek-ai/DeepSeek-OCR"
 VLLM_REPO = "https://github.com/vllm-project/vllm.git"
-# Use an official Python base image for stability
 DOCKER_BASE_IMAGE = "python:3.11-slim"
 TROUBLESHOOT_IMAGE_NAME = "deepseek-ocr-vllm:troubleshoot"
 
@@ -78,28 +77,28 @@ def download_model(model_weights_dir: Path):
 
 def create_dockerfile(dockerfile_path: Path, vllm_source_dir_name: str, model_weights_dir_name: str, api_port: int):
     """
-    Generates a more robust Dockerfile using a Python base image.
+    Generates the definitive Dockerfile, including a pip upgrade.
     """
     logging.info(f"Creating Dockerfile at '{dockerfile_path}' (Version: {SCRIPT_VERSION})")
 
     dockerfile_content = f"""
 # Stage 1: Builder
-# Start from a stable Python base image to avoid environment setup issues
 FROM {DOCKER_BASE_IMAGE} AS builder
 
-# Set environment variables for the entire build stage
 ENV DEBIAN_FRONTEND=noninteractive
 ENV USE_CUDA=0
 
-# Install only the essential build tools
+# Install essential build tools
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     git \\
     build-essential \\
     cmake \\
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and install PyTorch for CPU first
+# CRITICAL FIX: Upgrade pip to the latest version first
 RUN pip install --no-cache-dir --upgrade pip
+
+# Now, install PyTorch for CPU using the upgraded pip
 RUN pip install --no-cache-dir torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
 
 # Set the working directory before copying files
@@ -108,27 +107,24 @@ WORKDIR /app
 # Copy vLLM source code into the workdir
 COPY ./{vllm_source_dir_name} .
 
-# Install vLLM, inheriting the build environment
+# Install vLLM, which will now find the correct PyTorch version
 RUN VLLM_TARGET_DEVICE=cpu pip install -e .
 
 # Stage 2: Final Image
 FROM {DOCKER_BASE_IMAGE}
 
-# Set the working directory
 WORKDIR /app
 
 # Copy the installed Python packages from the builder stage
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-
-# Copy the vLLM command-line entrypoints
-COPY --from=builder /usr/local/bin /usr/local/bin
+COPY --from-builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from-builder /usr/local/bin /usr/local/bin
 
 # Copy the downloaded model weights
 COPY ./{model_weights_dir_name} /app/model_weights
 
 EXPOSE {api_port}
 
-# Run the API server, referencing the correct model path
+# Run the API server
 CMD ["python3", "-m", "vllm.entrypoints.openai.api_server", \\
      "--model", "/app/model_weights", \\
      "--host", "0.0.0.0", \\
