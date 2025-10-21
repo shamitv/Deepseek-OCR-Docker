@@ -1,66 +1,29 @@
-# -----------------------------------------
-# 1. Install system dependencies
-# -----------------------------------------
-apt-get update
-apt-get install -y \
-    build-essential \
-    libnuma-dev \
-    python3 \
-    python3-pip \
-    python3-venv \
-    git \
-    wget \
-    curl
+# This file contains the shell commands to build and install vLLM.
 
-# -----------------------------------------
-# 2. Set up working directory
-# -----------------------------------------
+# 1. Update system and install dependencies
+apt-get update
+apt-get install -y build-essential libnuma-dev
+
+# 2. Create a directory for the source code and move into it
 mkdir -p /app/vllm_source
 cd /app/vllm_source
 
-# -----------------------------------------
-# 3. Clone vLLM at compatible tag (v0.8.5)
-# -----------------------------------------
-git clone --branch v0.8.5 https://github.com/vllm-project/vllm.git .
-# NOTE: v0.8.5 is the latest DeepSeek-OCR-compatible version
+# 3. Clone the vLLM repository into the current directory
+git clone https://github.com/vllm-project/vllm.git .
 
-# -----------------------------------------
-# 4. Create and activate Python virtual environment
-# -----------------------------------------
-python3 -m venv myenv
+# 4. Create and activate a Python virtual environment
+python -m venv myenv
 source myenv/bin/activate
 
-# -----------------------------------------
-# 5. Upgrade pip and install wheel & build tools
-# -----------------------------------------
+# 5. Upgrade pip and install the 'build' package
 pip install --upgrade pip
-pip install setuptools wheel packaging ninja build
+pip install build
 
-# -----------------------------------------
-# 6. Install PyTorch for CPU (no CUDA)
-# -----------------------------------------
-pip install torch==2.1.0 --index-url https://download.pytorch.org/whl/cpu
+# 6. Install Python dependencies using the official requirements file
+pip install -r requirements/cpu-build.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
-# -----------------------------------------
-# 7. Install vLLM with CPU backend from source
-# -----------------------------------------
-export VLLM_TARGET_DEVICE=cpu
-pip install -r requirements.txt
-python setup.py install
+# 7. Build the vLLM wheel
+VLLM_TARGET_DEVICE=cpu python -m build --wheel --no-isolation
 
-# -----------------------------------------
-# 8. Install DeepSeek-OCR required Python dependencies
-# -----------------------------------------
-pip install \
-    addict \
-    transformers==4.35.0 \
-    accelerate==0.24.1 \
-    xformers==0.0.23.post1 \
-    einops
-
-# -----------------------------------------
-# 9. (Optional) Test if vLLM CLI loads correctly
-# -----------------------------------------
-vllm --help
-
-
+# 8. Install the wheel you just built
+pip install dist/*.whl
