@@ -1,287 +1,272 @@
-#!/usr/bin/env python3
 import argparse
-import base64
 import logging
 import os
-import requests
-import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-import docker
-from huggingface_hub import snapshot_download
-from openai import OpenAI, APIConnectionError
-
 # --- Configuration ---
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
-logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
-
+SCRIPT_VERSION = "1.3"
 MODEL_ID = "deepseek-ai/DeepSeek-OCR"
-VLLM_REPO_URL = "https://github.com/vllm-project/vllm.git"
-TEST_IMAGE_URL = "https://huggingface.co/deepseek-ai/DeepSeek-OCR/resolve/main/assets/show1.jpg"
+VLLM_REPO = "https://github.com/vllm-project/vllm.git"
+DOCKER_BASE_IMAGE = "ubuntu:22.04"
+
+# --- Logging Setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,
+)
 
 
-# --- Helper Functions ---
+def run_command(command, cwd=None, capture_output=False, text=True):
+    """
+    Executes a shell command and logs its output, raising an error on failure.
+    """
+    if isinstance(command, str):
+        command = command.split()
 
-def run_command(command, cwd=None):
-    """Executes a shell command and raises an exception on failure."""
-    logging.info(f"Running command: {' '.join(command)}")
+    logging.info(f"Running command: {' '.join(command)}" + (f" in {cwd}" if cwd else ""))
     try:
-        subprocess.run(command, check=True, cwd=cwd, text=True)
+        result = subprocess.run(
+            command,
+            check=True,
+            cwd=cwd,
+            capture_output=capture_output,
+            text=text
+        )
+        if capture_output:
+            logging.info(f"Command output:\n{result.stdout}")
+        return result
     except subprocess.CalledProcessError as e:
         logging.error(f"Command failed with exit code {e.returncode}")
+        if e.stdout:
+            logging.error(f"STDOUT: {e.stdout}")
+        if e.stderr:
+            logging.error(f"STDERR: {e.stderr}")
         raise
 
 
-def download_model(destination_dir: Path):
-    """Downloads the DeepSeek-OCR model from Hugging Face."""
-    logging.info(f"Downloading model '{MODEL_ID}' to '{destination_dir}'...")
-    if destination_dir.exists():
-        logging.warning(f"Destination directory '{destination_dir}' already exists. Skipping download.")
+def download_model(model_weights_dir: Path):
+    """
+    Downloads the model from Hugging Face if it doesn't already exist.
+    """
+    if model_weights_dir.exists() and any(model_weights_dir.iterdir()):
+        logging.warning(
+            f"Destination directory '{model_weights_dir}' already exists and is not empty. Skipping download."
+        )
         return
+
+    logging.info(f"Downloading model '{MODEL_ID}' to '{model_weights_dir}'...")
+    from huggingface_hub import snapshot_download
+    from tqdm import tqdm
+
     snapshot_download(
-        repo_id=MODEL_ID,
-        local_dir=destination_dir,
+        MODEL_ID,
+        local_dir=str(model_weights_dir),
         local_dir_use_symlinks=False,
+        tqdm_class=tqdm,
     )
     logging.info("Model download complete.")
 
 
-def create_dockerfile(work_dir: Path, model_dir_name: str):
-    """Programmatically creates the Dockerfile for the build."""
-    dockerfile_content = f"""
-# Base image: Ubuntu 22.04 LTS
-FROM ubuntu:22.04
+def create_dockerfile(dockerfile_path: Path, vllm_source_dir_name: str, model_weights_dir_name: str, api_port: int):
+    """
+    Generates the Dockerfile for the CPU build.
+    """
+    logging.info(f"Creating Dockerfile at '{dockerfile_path}'")
 
-# Set non-interactive frontend for apt-get
+    dockerfile_content = f"""
+# Stage 1: Build vLLM for CPU
+FROM {DOCKER_BASE_IMAGE} AS builder
+
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies and build toolchain
-RUN apt-get update -y && \\
-    apt-get install -y --no-install-recommends \\
-    git git-lfs python3.10-venv python3-pip python3-dev \\
-    build-essential cmake ninja-build libnuma-dev \\
-    gcc-12 g++-12 libtcmalloc-minimal4 && \\
-    rm -rf /var/lib/apt/lists/*
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    git \\
+    python3.11 \\
+    python3.11-venv \\
+    python3-pip \\
+    cmake \\
+    build-essential \\
+    && rm -rf /var/lib/apt/lists/*
 
-# Set gcc-12 as the default compiler
-RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 10 \\
-    --slave /usr/bin/g++ g++ /usr/bin/g++-12
+# Create and activate a virtual environment
+RUN python3.11 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Create a non-root user for security
-RUN useradd -ms /bin/bash vllmuser
-USER vllmuser
-WORKDIR /home/vllmuser
+# Install the specific PyTorch version required by vLLM for CPU
+RUN pip install --no-cache-dir torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
 
 # Copy vLLM source code
-COPY --chown=vllmuser:vllmuser./vllm_source /home/vllmuser/vllm
-
-# Create and activate a Python virtual environment
-RUN python3 -m venv.venv
-ENV PATH="/home/vllmuser/.venv/bin:$PATH"
-
-# Install Python dependencies for CPU build
-RUN pip install --no-cache-dir --upgrade pip && \\
-    pip install --no-cache-dir -r /home/vllmuser/vllm/requirements-cpu.txt \\
-    --extra-index-url https://download.pytorch.org/whl/cpu
+COPY ./{vllm_source_dir_name} /app/{vllm_source_dir_name}
+WORKDIR /app/{vllm_source_dir_name}
 
 # Build and install vLLM for CPU
-WORKDIR /home/vllmuser/vllm
-RUN VLLM_TARGET_DEVICE=cpu python setup.py install
+# It will use the pre-installed torch version
+RUN VLLM_TARGET_DEVICE=cpu MAX_JOBS=$(nproc) pip install --no-cache-dir -e .
 
-# Copy the model into the image
-COPY --chown=vllmuser:vllmuser./{model_dir_name} /home/vllmuser/model
+# Stage 2: Final Image
+FROM {DOCKER_BASE_IMAGE}
 
-# Expose the internal API port
-EXPOSE 8000
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Set the entrypoint to preload TCMalloc and start the server
-CMD
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    python3.11 \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the virtual environment with vLLM installed from the builder stage
+COPY --from=builder /opt/venv /opt/venv
+
+# Copy the downloaded model weights
+COPY ./{model_weights_dir_name} /app/{model_weights_dir_name}
+
+# Set up environment
+ENV PATH="/opt/venv/bin:$PATH"
+WORKDIR /app
+
+# Expose the API port
+EXPOSE {api_port}
+
+# Start the vLLM OpenAI-compatible server
+CMD ["python3", "-m", "vllm.entrypoints.openai.api_server", \\
+     "--model", "/app/{model_weights_dir_name}", \\
+     "--host", "0.0.0.0", \\
+     "--port", "{str(api_port)}", \\
+     "--tensor-parallel-size", "1", \\
+     "--enforce-eager"]
 """
-    dockerfile_path = work_dir / "Dockerfile"
-    logging.info(f"Creating Dockerfile at '{dockerfile_path}'")
-    with open(dockerfile_path, "w") as f:
-        f.write(dockerfile_content)
+    dockerfile_path.write_text(dockerfile_content)
 
 
-def build_docker_image(image_name: str, context_path: Path):
-    """Clones vLLM and builds the Docker image."""
-    vllm_source_path = context_path / "vllm_source"
-    if not vllm_source_path.is_dir():
-        logging.info(f"Cloning vLLM repository to '{vllm_source_path}'...")
-        run_command()
-    else:
-        logging.info("vLLM repository already exists. Skipping clone.")
-
-    logging.info(f"Building Docker image '{image_name}'...")
-    client = docker.from_env()
-    try:
-        image, build_log = client.images.build(
-            path=str(context_path),
-            tag=image_name,
-            rm=True,
-            forcerm=True
+def clone_vllm(vllm_source_dir: Path):
+    """
+    Clones the vLLM repository if it doesn't already exist.
+    """
+    if vllm_source_dir.exists() and any(vllm_source_dir.iterdir()):
+        logging.warning(
+            f"vLLM source directory '{vllm_source_dir}' already exists. Skipping clone."
         )
-        for line in build_log:
-            if 'stream' in line:
-                print(line['stream'].strip())
-        logging.info(f"Successfully built image: {image.tags}")
-    except docker.errors.BuildError as e:
-        logging.error("Docker build failed.")
-        for line in e.build_log:
-            if 'stream' in line:
-                print(line['stream'].strip(), file=sys.stderr)
-        raise
+        return
+    logging.info(f"Cloning vLLM repository to '{vllm_source_dir}'...")
+    run_command(["git", "clone", VLLM_REPO, str(vllm_source_dir)])
 
 
-def deploy_container(image_name: str, container_name: str, port: int):
-    """Deploys the Docker container."""
-    logging.info(f"Deploying container '{container_name}' from image '{image_name}'...")
-    client = docker.from_env()
+def send_test_request(port: int):
+    """
+    Sends a sample request to the running API server to verify it's working.
+    """
+    import openai
 
-    # Stop and remove existing container with the same name
-    try:
-        existing_container = client.containers.get(container_name)
-        logging.warning(f"Found existing container '{container_name}'. Stopping and removing it.")
-        existing_container.stop()
-        existing_container.remove()
-    except docker.errors.NotFound:
-        pass  # No existing container, which is fine
-
-    container = client.containers.run(
-        image=image_name,
-        name=container_name,
-        detach=True,
-        ports={'8000/tcp': port},
-        shm_size='4g'  # Recommended for PyTorch
+    logging.info("Sending test request to the API server...")
+    client = openai.OpenAI(
+        base_url=f"http://localhost:{port}/v1",
+        api_key="not-needed",
     )
-    logging.info(f"Container '{container.name}' started with ID: {container.id}")
-    return container
-
-
-def run_inference_test(container_name: str, port: int):
-    """Runs a test inference request against the deployed container."""
-    logging.info("Running inference test...")
-    api_base = f"http://localhost:{port}/v1"
-    health_check_url = f"http://localhost:{port}/health"
-
-    # Wait for the server to be ready
-    max_wait_time = 300  # 5 minutes
-    start_time = time.time()
-    server_ready = False
-    logging.info(f"Waiting for server to become healthy at {health_check_url}...")
-    while time.time() - start_time < max_wait_time:
-        try:
-            response = requests.get(health_check_url)
-            if response.status_code == 200:
-                logging.info("Server is healthy.")
-                server_ready = True
-                break
-        except requests.ConnectionError:
-            time.sleep(10)
-
-    if not server_ready:
-        logging.error("Server did not become healthy within the time limit.")
-        raise RuntimeError("Server readiness check failed.")
-
-    client = OpenAI(api_key="EMPTY", base_url=api_base)
-
     try:
-        logging.info(f"Fetching test image from '{TEST_IMAGE_URL}'")
-        response = requests.get(TEST_IMAGE_URL)
-        response.raise_for_status()
-        image_base64 = base64.b64encode(response.content).decode("utf-8")
-
-        logging.info("Sending request to the model...")
-        chat_completion = client.chat.completions.create(
+        completion = client.chat.completions.create(
             model=MODEL_ID,
             messages=[
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
-                        {"type": "text", "text": "\n<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"}
-                    ],
+                    "content": "What is the primary purpose of the DeepSeek-OCR model?",
                 }
             ],
-            max_tokens=1024,
         )
-
-        ocr_result = chat_completion.choices.message.content
-        logging.info("--- OCR Result ---")
-        print(ocr_result)
-        logging.info("--------------------")
-
-        if ocr_result and isinstance(ocr_result, str):
-            logging.info("Inference test PASSED.")
-        else:
-            logging.error("Inference test FAILED: Received an empty or invalid response.")
-            raise ValueError("Invalid response from model.")
-
+        response_content = completion.choices[0].message.content
+        logging.info("--- Test Response ---")
+        logging.info(response_content)
+        logging.info("---")
+        logging.info("Test request successful! The server is running correctly.")
     except Exception as e:
-        logging.error(f"An error occurred during the inference test: {e}")
+        logging.error(f"Test request failed: {e}")
+        logging.error(
+            "The container might be running, but the server failed to start. "
+            "Check container logs with 'docker logs deepseek-ocr-container'"
+        )
         raise
 
 
-# --- Main Execution ---
-
 def main():
-    parser = argparse.ArgumentParser(description="Automated Deployment of DeepSeek-OCR on CPU with vLLM.")
+    """
+    Main function to orchestrate the deployment pipeline.
+    """
+    parser = argparse.ArgumentParser(
+        description=f"Deploy DeepSeek-OCR with vLLM on CPU using Docker. Version: {SCRIPT_VERSION}"
+    )
     parser.add_argument(
-        "--dest-dir",
+        "--model-dir",
         type=str,
         default="./model_data",
-        help="Destination directory for model download and build context."
-    )
-    parser.add_argument(
-        "--image-name",
-        type=str,
-        default="deepseek-ocr-vllm-cpu:latest",
-        help="Name and tag for the Docker image."
-    )
-    parser.add_argument(
-        "--container-name",
-        type=str,
-        default="deepseek-ocr-server",
-        help="Name for the running Docker container."
+        help="Directory to store model weights and build artifacts.",
     )
     parser.add_argument(
         "--port",
         type=int,
         default=8000,
-        help="Port to expose the API server on the host machine."
+        help="Port to expose the API on the host machine.",
+    )
+    parser.add_argument(
+        "--image-name",
+        type=str,
+        default="deepseek-ocr-vllm:latest",
+        help="Name and tag for the Docker image.",
     )
     args = parser.parse_args()
 
-    work_dir = Path(args.dest_dir).resolve()
-    work_dir.mkdir(exist_ok=True)
-
-    model_dir_name = "model_weights"
-    model_path = work_dir / model_dir_name
+    logging.info(f"--- DeepSeek-OCR Deployment Script v{SCRIPT_VERSION} ---")
 
     try:
-        # Step 1: Download the model
-        download_model(model_path)
+        # Define paths relative to the model directory
+        base_dir = Path(args.model_dir).resolve()
+        base_dir.mkdir(exist_ok=True)
 
-        # Step 2: Create the Dockerfile
-        create_dockerfile(work_dir, model_dir_name)
+        model_weights_dir = base_dir / "model_weights"
+        vllm_source_dir = base_dir / "vllm_source"
+        dockerfile_path = base_dir / "Dockerfile"
 
-        # Step 3: Build the Docker image
-        build_docker_image(args.image_name, work_dir)
+        # 1. Download model
+        download_model(model_weights_dir)
 
-        # Step 4: Deploy the container
-        container = deploy_container(args.image_name, args.container_name, args.port)
+        # 2. Clone vLLM source
+        clone_vllm(vllm_source_dir)
 
-        # Step 5: Run the inference test
-        run_inference_test(args.container_name, args.port)
+        # 3. Create Dockerfile
+        create_dockerfile(
+            dockerfile_path,
+            vllm_source_dir.name,
+            model_weights_dir.name,
+            args.port
+        )
 
-        logging.info(
-            f"\nDeployment successful! The DeepSeek-OCR server is running in container '{args.container_name}'.")
-        logging.info(f"API Endpoint: http://localhost:{args.port}/v1")
-        logging.info(f"To stop the server, run: docker stop {args.container_name}")
+        # 4. Build Docker image
+        logging.info(f"Building Docker image '{args.image_name}'...")
+        run_command(["docker", "build", "-t", args.image_name, "."], cwd=str(base_dir))
+        logging.info("Docker image built successfully.")
+
+        # 5. Deploy Docker container
+        container_name = "deepseek-ocr-container"
+        logging.info(f"Stopping and removing existing container named '{container_name}'...")
+        # Stop and remove any previous container with the same name to avoid conflicts
+        subprocess.run(["docker", "stop", container_name], capture_output=True)
+        subprocess.run(["docker", "rm", container_name], capture_output=True)
+
+        logging.info(f"Starting Docker container '{container_name}'...")
+        run_command([
+            "docker", "run", "--rm", "-d",
+            "-p", f"{args.port}:{args.port}",
+            "--name", container_name,
+            args.image_name
+        ])
+        logging.info(f"Container started. API should be available at http://localhost:{args.port}")
+
+        # 6. Verify deployment with a test request
+        logging.info("Waiting 30 seconds for the server to initialize...")
+        time.sleep(30)
+        send_test_request(args.port)
 
     except Exception as e:
         logging.error(f"Deployment pipeline failed: {e}")
@@ -290,3 +275,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
