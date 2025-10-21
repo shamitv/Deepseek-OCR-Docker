@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_VERSION = "3.0 (Final)"
+SCRIPT_VERSION = "3.1 (Final, Runtime Fix)"
 MODEL_ID = "deepseek-ai/DeepSeek-OCR"
 VLLM_REPO = "https://github.com/vllm-project/vllm.git"
 DOCKER_BASE_IMAGE = "python:3.11-slim"
@@ -25,8 +25,6 @@ logging.basicConfig(
 def run_command(command, cwd=None, capture_output=False, text=True, raise_on_error=True):
     """
     Executes a shell command.
-    If raise_on_error is True, raises an exception on failure.
-    Otherwise, returns the completed process object.
     """
     if isinstance(command, str):
         command = command.split()
@@ -78,38 +76,41 @@ def download_model(model_weights_dir: Path):
 
 def create_dockerfile(dockerfile_path: Path, vllm_source_dir_name: str, model_weights_dir_name: str, api_port: int):
     """
-    Generates the definitive Dockerfile based on the successful manual build process.
+    Generates the definitive Dockerfile with an explicit, compatible torch/torchvision install.
     """
     logging.info(f"Creating Dockerfile at '{dockerfile_path}' (Version: {SCRIPT_VERSION})")
 
     dockerfile_content = f"""
-# Stage 1: Builder - Based on the successful manual debug session
+# Stage 1: Builder
 FROM {DOCKER_BASE_IMAGE} AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install all necessary system dependencies identified during debugging
+# Install all necessary system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     git \\
     build-essential \\
     libnuma-dev \\
     && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory
 WORKDIR /app
 
 # Upgrade pip and install the 'build' package
 RUN pip install --no-cache-dir --upgrade pip
 RUN pip install --no-cache-dir build
 
+# CRITICAL RUNTIME FIX: Install compatible torch and torchvision together for CPU
+# Also install transformers, which is a key dependency for the model.
+RUN pip install --no-cache-dir \\
+    "torch==2.8.0+cpu" \\
+    "torchvision==0.19.0+cpu" \\
+    "transformers==4.49.2" \\
+    --extra-index-url https://download.pytorch.org/whl/cpu
+
 # Copy vLLM source code
 COPY ./{vllm_source_dir_name} .
 
-# Install Python dependencies using the official requirements file
-# This was the key discovery from the manual build process
-RUN pip install --no-cache-dir -r requirements/cpu-build.txt --extra-index-url https://download.pytorch.org/whl/cpu
-
-# Build the wheel using the official method
+# Build the vLLM wheel. It will use the pre-installed libraries.
 RUN VLLM_TARGET_DEVICE=cpu python -m build --wheel --no-isolation
 
 # Stage 2: Final Production Image
@@ -117,11 +118,13 @@ FROM {DOCKER_BASE_IMAGE}
 
 WORKDIR /app
 
-# Copy the built wheel and its installed dependencies from the builder stage
+# Copy the installed Python packages from the builder stage
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+
+# Copy the vLLM wheel
 COPY --from=builder /app/dist/*.whl /app/wheel/
 
-# Install the built wheel
+# Install the built vLLM wheel
 RUN pip install --no-cache-dir /app/wheel/*.whl
 
 # Copy the downloaded model weights
