@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 # --- Configuration ---
-SCRIPT_VERSION = "1.5"
+SCRIPT_VERSION = "1.7"
 MODEL_ID = "deepseek-ai/DeepSeek-OCR"
 VLLM_REPO = "https://github.com/vllm-project/vllm.git"
 DOCKER_BASE_IMAGE = "ubuntu:22.04"
@@ -18,7 +18,6 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     stream=sys.stdout,
 )
-
 
 def run_command(command, cwd=None, capture_output=False, text=True):
     """
@@ -47,7 +46,6 @@ def run_command(command, cwd=None, capture_output=False, text=True):
             logging.error(f"STDERR: {e.stderr}")
         raise
 
-
 def download_model(model_weights_dir: Path):
     """
     Downloads the model from Hugging Face if it doesn't already exist.
@@ -59,6 +57,7 @@ def download_model(model_weights_dir: Path):
         return
 
     logging.info(f"Downloading model '{MODEL_ID}' to '{model_weights_dir}'...")
+    # Lazy import to avoid dependency on huggingface_hub for non-download actions
     from huggingface_hub import snapshot_download
     from tqdm import tqdm
 
@@ -70,74 +69,52 @@ def download_model(model_weights_dir: Path):
     )
     logging.info("Model download complete.")
 
-
 def create_dockerfile(dockerfile_path: Path, vllm_source_dir_name: str, model_weights_dir_name: str, api_port: int):
     """
-    Generates the Dockerfile for the CPU build.
+    Generates the Dockerfile for the CPU build, aligned with official vLLM docs.
     """
-    logging.info(f"Creating Dockerfile at '{dockerfile_path}'")
+    logging.info(f"Creating Dockerfile at '{dockerfile_path}' based on official vLLM CPU instructions.")
 
     dockerfile_content = f"""
-# Stage 1: Build vLLM for CPU
+# Build stage
 FROM {DOCKER_BASE_IMAGE} AS builder
-
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies, including python development headers and ninja
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     git \\
     python3.11 \\
     python3.11-dev \\
-    python3.11-venv \\
-    python3-pip \\
-    cmake \\
-    build-essential \\
-    ninja-build \\
-    && rm -rf /var/lib/apt/lists/*
-
-# Create and activate a virtual environment
-RUN python3.11 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Install numpy, which is needed by torch setup
-RUN pip install --no-cache-dir numpy
-
-# Install the specific PyTorch version required by vLLM for CPU
-RUN pip install --no-cache-dir torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+    python3-pip
 
 # Copy vLLM source code
-COPY ./{vllm_source_dir_name} /app/{vllm_source_dir_name}
-WORKDIR /app/{vllm_source_dir_name}
+WORKDIR /app
+COPY ./{vllm_source_dir_name} /app/vllm
+WORKDIR /app/vllm
 
-# Build and install vLLM for CPU
-# Set USE_CUDA=0 to explicitly disable GPU checks during the build
-ENV USE_CUDA=0
-RUN VLLM_TARGET_DEVICE=cpu MAX_JOBS=$(nproc) pip install --no-cache-dir -e .
+# Install vLLM in editable mode for CPU
+# This command follows the official documentation for building from source for CPU
+RUN VLLM_TARGET_DEVICE=cpu pip install -e .
 
-# Stage 2: Final Image
+# Final stage
 FROM {DOCKER_BASE_IMAGE}
-
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \\
-    python3.11 \\
-    && rm -rf /var/lib/apt/lists/*
+# Install Python runtime
+RUN apt-get update && apt-get install -y --no-install-recommends python3.11
 
-# Copy the virtual environment with vLLM installed from the builder stage
-COPY --from=builder /opt/venv /opt/venv
+# Copy installed vLLM and its dependencies from the builder stage
+COPY --from=builder /usr/local/lib/python3.11/dist-packages /usr/local/lib/python3.11/dist-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+WORKDIR /app
 
 # Copy the downloaded model weights
 COPY ./{model_weights_dir_name} /app/{model_weights_dir_name}
 
-# Set up environment
-ENV PATH="/opt/venv/bin:$PATH"
-WORKDIR /app
-
-# Expose the API port
 EXPOSE {api_port}
 
-# Start the vLLM OpenAI-compatible server
+# Run the API server
 CMD ["python3", "-m", "vllm.entrypoints.openai.api_server", \\
      "--model", "/app/{model_weights_dir_name}", \\
      "--host", "0.0.0.0", \\
@@ -146,7 +123,6 @@ CMD ["python3", "-m", "vllm.entrypoints.openai.api_server", \\
      "--enforce-eager"]
 """
     dockerfile_path.write_text(dockerfile_content)
-
 
 def clone_vllm(vllm_source_dir: Path):
     """
@@ -160,11 +136,11 @@ def clone_vllm(vllm_source_dir: Path):
     logging.info(f"Cloning vLLM repository to '{vllm_source_dir}'...")
     run_command(["git", "clone", VLLM_REPO, str(vllm_source_dir)])
 
-
 def send_test_request(port: int):
     """
     Sends a sample request to the running API server to verify it's working.
     """
+    # Lazy import to avoid making openai a hard dependency of the script itself
     import openai
 
     logging.info("Sending test request to the API server...")
@@ -194,7 +170,6 @@ def send_test_request(port: int):
             "Check container logs with 'docker logs deepseek-ocr-container'"
         )
         raise
-
 
 def main():
     """
@@ -257,8 +232,8 @@ def main():
         container_name = "deepseek-ocr-container"
         logging.info(f"Stopping and removing existing container named '{container_name}'...")
         # Stop and remove any previous container with the same name to avoid conflicts
-        subprocess.run(["docker", "stop", container_name], capture_output=True)
-        subprocess.run(["docker", "rm", container_name], capture_output=True)
+        subprocess.run(["docker", "stop", container_name], capture_output=True, text=True)
+        subprocess.run(["docker", "rm", container_name], capture_output=True, text=True)
 
         logging.info(f"Starting Docker container '{container_name}'...")
         run_command([
@@ -277,7 +252,6 @@ def main():
     except Exception as e:
         logging.error(f"Deployment pipeline failed: {e}")
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()
