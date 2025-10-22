@@ -4,21 +4,18 @@
 apt-get update
 apt-get install -y build-essential libnuma-dev
 
-# 2. Create a directory for the source code and move into it
-mkdir -p /app/vllm_source
+# 2. Use the vLLM source copied from the repository submodule
+# The Docker build copies `third_party/vllm` into /app/vllm_source.
 cd /app/vllm_source
-
-# 3. Clone the vLLM repository into the current directory
-git clone https://github.com/vllm-project/vllm.git vllm_source
-cd vllm_source
 
 # 4. Create and activate a Python virtual environment
 python -m venv myenv
 source myenv/bin/activate
 
-# 5. Upgrade pip and install the 'build' package
+# 5. Upgrade pip and install the 'build' and package 'addict'
 pip install --upgrade pip
 pip install build
+pip install addict
 
 # 6. Install Python dependencies using the official requirements file
 pip install -r requirements/cpu-build.txt --extra-index-url https://download.pytorch.org/whl/cpu
