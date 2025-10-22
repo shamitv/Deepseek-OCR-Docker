@@ -92,3 +92,6 @@ python -m vllm.entrypoints.openai.api_server \
     --trust-remote-code
 
 pip3 install setproctitle
+
+docker ps -a --format '{{.ID}}\t{{.Image}}' | awk 'tolower($0) ~ /deepseek/ {print $1}' | xargs -r docker rm -f
+docker images --format '{{.Repository}}:{{.Tag}}\t{{.ID}}' | awk 'tolower($0) ~ /deepseek/ {print $2}' | xargs -r docker rmi -f
