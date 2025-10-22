@@ -26,6 +26,10 @@ pip install addict
 
 pip install -r requirements/cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
+# 0.8.5 specific build dependencies
+
+"cmake>=3.26" wheel packaging ninja "setuptools-scm>=8" "numpy<2.0" 
+
 # 7. Build the vLLM wheel
 VLLM_TARGET_DEVICE=cpu python -m build --wheel --no-isolation
 
