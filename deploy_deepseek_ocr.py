@@ -89,29 +89,52 @@ python -m vllm.entrypoints.openai.api_server \\
 
 
 def create_dockerfile(dockerfile_path: Path, model_dir: str, install_script_name: str, run_script_name: str):
-    """Generates a simplified Dockerfile with the corrected dependencies."""
+    """Generates the Dockerfile used to build the deployment image."""
     logging.info(f"Creating Dockerfile at '{dockerfile_path}'...")
+
+    repo_root = dockerfile_path.parent.parent
+    script_dir = dockerfile_path.parent
     model_dir_path = Path(model_dir)
+    model_dir_full_path = (script_dir / model_dir_path).resolve()
+    install_script_full_path = (script_dir / install_script_name).resolve()
+    run_script_full_path = (script_dir / run_script_name).resolve()
+
+    try:
+        model_dir_rel = model_dir_full_path.relative_to(repo_root).as_posix()
+        install_script_rel = install_script_full_path.relative_to(repo_root).as_posix()
+        run_script_rel = run_script_full_path.relative_to(repo_root).as_posix()
+    except ValueError as exc:
+        raise RuntimeError("Model assets and scripts must reside within the repository root.") from exc
+
     dockerfile_content = f"""
 FROM {DOCKER_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-    # Update package lists; installation of build deps (build-essential, libnuma-dev, etc.)
-    # will be handled in the install script copied into the image.
-    RUN apt-get update && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    python3.11-venv \\
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy the model files, install script, run script, and the vLLM source from the
-# local submodule (third_party/vllm) so we don't need to clone from the network.
-# The submodule should be present/updated in the repository before building.
+# Copy the vLLM source and its git metadata so setuptools-scm can resolve the version.
 COPY third_party/vllm /app/vllm_source
+COPY .git/modules/third_party/vllm /tmp/vllm_git_metadata
+
+RUN set -eux; \\
+    mkdir -p /app/vllm_source/.git; \\
+    cp -a /tmp/vllm_git_metadata/. /app/vllm_source/.git/; \\
+    if grep -q '^worktree = ' /app/vllm_source/.git/config; then \\
+        sed -i 's|^worktree = .*|worktree = /app/vllm_source|' /app/vllm_source/.git/config; \\
+    else \\
+        printf '[core]\n\tworktree = /app/vllm_source\n' >> /app/vllm_source/.git/config; \\
+    fi; \\
+    rm -rf /tmp/vllm_git_metadata
 
 # Copy the model files, install script, and run script
-COPY {model_dir_path.name} /app/{model_dir_path.name}
-COPY {install_script_name} /app/{install_script_name}
-COPY {run_script_name} /app/{run_script_name}
+COPY {model_dir_rel} /app/{model_dir_path.name}
+COPY {install_script_rel} /app/{install_script_name}
+COPY {run_script_rel} /app/{run_script_name}
 
 # Make scripts executable inside the container
 RUN chmod +x /app/{install_script_name} /app/{run_script_name}
@@ -121,7 +144,7 @@ RUN ./{install_script_name}
 
 # Expose the port and set the run script as the default command
 EXPOSE 8000
-CMD ["./run_model.sh"]
+CMD ["./{run_script_name}"]
 """
     dockerfile_path.write_text(dockerfile_content)
     logging.info("Dockerfile created successfully.")
@@ -140,6 +163,7 @@ def main():
     logging.info(f"--- DeepSeek-OCR Deployment Scripter v{SCRIPT_VERSION} ---")
 
     script_dir = Path(__file__).resolve().parent
+    repo_root = script_dir.parent
     install_commands_path = script_dir / INSTALL_COMMANDS_FILENAME
     install_script_path = script_dir / "install_vllm.sh"
     run_script_path = script_dir / "run_model.sh"
@@ -153,11 +177,38 @@ def main():
         create_run_script(run_script_path, args.model_dir, args.port)
         create_dockerfile(dockerfile_path, args.model_dir, install_script_path.name, run_script_path.name)
 
+        vllm_source_path = repo_root / "third_party" / "vllm"
+        vllm_git_metadata_path = repo_root / ".git" / "modules" / "third_party" / "vllm"
+
+        if not vllm_source_path.is_dir():
+            logging.error(
+                "vLLM source directory not found at '%s'. Ensure the submodule is initialized.",
+                vllm_source_path,
+            )
+            sys.exit(1)
+
+        if not vllm_git_metadata_path.is_dir():
+            logging.error(
+                "vLLM git metadata not found at '%s'. Run 'git submodule update --init --recursive'.",
+                vllm_git_metadata_path,
+            )
+            sys.exit(1)
+
         logging.info(f"Building Docker image '{args.image_name}'...")
-        build_command = ["docker", "build", "--progress=plain", "-t", args.image_name, "."]
+        dockerfile_rel_path = dockerfile_path.relative_to(repo_root)
+        build_command = [
+            "docker",
+            "build",
+            "--progress=plain",
+            "-f",
+            str(dockerfile_rel_path),
+            "-t",
+            args.image_name,
+            ".",
+        ]
 
         try:
-            run_command(build_command, cwd=str(script_dir))
+            run_command(build_command, cwd=str(repo_root))
             logging.info("Docker image built successfully.")
         except subprocess.CalledProcessError:
             logging.error("Docker build failed.")
