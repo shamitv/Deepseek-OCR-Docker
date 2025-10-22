@@ -97,12 +97,16 @@ FROM {DOCKER_BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install only git. The python base image already has venv.
-RUN apt-get update && apt-get install -y --no-install-recommends \\
-    git \\
-    && rm -rf /var/lib/apt/lists/*
+    # Update package lists; installation of build deps (build-essential, libnuma-dev, etc.)
+    # will be handled in the install script copied into the image.
+    RUN apt-get update && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Copy the model files, install script, run script, and the vLLM source from the
+# local submodule (third_party/vllm) so we don't need to clone from the network.
+# The submodule should be present/updated in the repository before building.
+COPY third_party/vllm /app/vllm_source
 
 # Copy the model files, install script, and run script
 COPY {model_dir_path.name} /app/{model_dir_path.name}
