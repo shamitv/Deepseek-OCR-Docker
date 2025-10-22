@@ -1,0 +1,94 @@
+    1  ls -ltra
+    2  ls vllm_source/
+    3  ls -ltr vllm_source/vllm_source/
+    4  ls -ltr
+    5  ls -ltr vllm_source/vllm_source/myenv/
+    6  source vllm_source/vllm_source/myenv/bin/activate
+    7  ls -ltr
+    8  cat run_model.sh
+    9  ls -ltr /app/model_data/model_weights/
+   10  python -m vllm.entrypoints.openai.api_server     --model "/app/model_data"     --host "0.0.0.0"     --port "8000"     --tensor-parallel-size 1     --enforce-eager
+   11  # clean out mismatched installs
+   12  pip uninstall -y torchvision torchaudio torch
+   13  # install the matching CPU wheels (pin all three)
+   14  pip install --index-url https://download.pytorch.org/whl/cpu   torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --force-reinstall
+   15  # In your myenv
+   16  pip install --upgrade --force-reinstall "numpy==2.2.2"
+   17  pip check  # should be clean now
+   18  python -m vllm.entrypoints.openai.api_server     --model "/app/model_data"     --host "0.0.0.0"     --port "8000"     --tensor-parallel-size 1     --enforce-eager
+   19  python -m vllm.entrypoints.openai.api_server     --model "/app/model_data/model_weights/"     --host "0.0.0.0"     --port "8000"     --tensor-parallel-size 1     --enforce-eager
+   20  python -m vllm.entrypoints.openai.api_server     --model "/app/model_data/model_weights/"     --host "0.0.0.0"     --port "8000"     --tensor-parallel-size 1     --enforce-eager --trust-remote-code
+   21  pip install addict
+   22  python -m vllm.entrypoints.openai.api_server     --model "/app/model_data/model_weights/"     --host "0.0.0.0"     --port "8000"     --tensor-parallel-size 1     --enforce-eager --trust-remote-code
+   23  pip install transformers==4.47.1
+   24  python -m vllm.entrypoints.openai.api_server     --model "/app/model_data/model_weights/"     --host "0.0.0.0"     --port "8000"     --tensor-parallel-size 1     --enforce-eager --trust-remote-code
+   25  cd /app/vllm_source/vllm_source/
+   26  pip uninstall vllm -y
+   27  git fetch --all --tags
+   28  git checkout v0.10.0
+   29  export VLLM_TARGET_DEVICE=cpu
+   30  export CMAKE_DISABLE_FIND_PACKAGE_CUDA=ON
+   31  pip install -e .
+   32  cd ..
+
+   No matching distribution found for torch==2.6.0+cpu;
+
+   pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cpu
+
+       1  ls -ltr
+    2  cd vllm_source/
+    3  ls -ltr
+    4  cd ..
+    5  mkdir vllm2
+    6  cd vllm2
+    7  git clone https://github.com/vllm-project/vllm.git vllm_source
+    8  cd vllm_source/
+    9  git fetch --all --tags
+   10  git checkout v0.10.0
+   11  python -m venv myenv
+   12  source myenv/bin/activate
+   13  pip install --upgrade pip
+   14  pip install build
+   15  pip install addict
+   16  pip install -r requirements/cpu-build.txt --extra-index-url https://download.pytorch.org/whl/cpu
+   17  VLLM_TARGET_DEVICE=cpu python -m build --wheel --no-isolation
+   18  history
+
+   10:23 PM 21 Oct
+0.8.5
+https://docs.vllm.ai/en/v0.8.5/getting_started/installation/cpu.html
+
+ history
+    1  ls -ltra
+    2  cd vllm_source/
+    3  ls -lrt
+    4  rm -rf myenv/
+    5  pyhton -m venv myenv
+    6  python -m venv myenv
+    7  source myenv/bin/activate
+    8  ls -lrt
+    9   git fetch --all --tags
+   10  history
+
+   git checkout v0.8.5
+
+#   pip install  torchvision==0.21.0+cpu  torch==2.6.0 --extra-index-url https://download.pytorch.org/whl/cpu
+
+pip install "cmake>=3.26" wheel packaging ninja "setuptools-scm>=8" numpy
+VLLM_TARGET_DEVICE=cpu python setup.py install
+
+python -m vllm.entrypoints.openai.api_server \
+    --model "/app/model_data/model_weights" \
+    --host "0.0.0.0" \
+    --port "8000" \
+    --tensor-parallel-size 1 \
+    --enforce-eager \
+    --trust-remote-code
+
+python -m vllm.entrypoints.openai.api_server \
+    --model "/app/model_data/model_weights" \
+    --host "0.0.0.0" \
+    --port "8000" \
+    --trust-remote-code
+
+pip3 install setproctitle
