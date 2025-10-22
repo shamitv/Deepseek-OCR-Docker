@@ -1,5 +1,7 @@
 # This file contains the shell commands to build and install vLLM.
 
+#File version v3.2
+
 # 1. Update system and install dependencies
 apt-get update
 apt-get install -y build-essential libnuma-dev
@@ -18,7 +20,11 @@ pip install build
 pip install addict
 
 # 6. Install Python dependencies using the official requirements file
-pip install -r requirements/cpu-build.txt --extra-index-url https://download.pytorch.org/whl/cpu
+#pip install -r requirements/cpu-build.txt --extra-index-url https://download.pytorch.org/whl/cpu
+
+#Change name of requirements to match 0.8.5 
+
+pip install -r requirements/cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # 7. Build the vLLM wheel
 VLLM_TARGET_DEVICE=cpu python -m build --wheel --no-isolation
