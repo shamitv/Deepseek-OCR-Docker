@@ -40,6 +40,14 @@ def run_command(command, cwd=None, raise_on_error=True):
         raise subprocess.CalledProcessError(process.returncode, command)
 
 
+def find_repo_root(start_path: Path) -> Path:
+    """Locate the repository root by searching for a .git directory or file."""
+    for path in [start_path, *start_path.parents]:
+        if (path / ".git").exists():
+            return path
+    raise RuntimeError(f"Could not locate repository root beginning at '{start_path}'.")
+
+
 def create_install_script(source_txt_path: Path, output_sh_path: Path):
     """Reads commands from a text file and creates an executable shell script."""
     logging.info(f"Generating install script at '{output_sh_path}' from '{source_txt_path}'...")
@@ -88,11 +96,16 @@ python -m vllm.entrypoints.openai.api_server \\
     logging.info("Run script created successfully.")
 
 
-def create_dockerfile(dockerfile_path: Path, model_dir: str, install_script_name: str, run_script_name: str):
+def create_dockerfile(
+    dockerfile_path: Path,
+    repo_root: Path,
+    model_dir: str,
+    install_script_name: str,
+    run_script_name: str,
+):
     """Generates the Dockerfile used to build the deployment image."""
     logging.info(f"Creating Dockerfile at '{dockerfile_path}'...")
 
-    repo_root = dockerfile_path.parent.parent
     script_dir = dockerfile_path.parent
     model_dir_path = Path(model_dir)
     model_dir_full_path = (script_dir / model_dir_path).resolve()
@@ -124,11 +137,11 @@ COPY .git/modules/third_party/vllm /tmp/vllm_git_metadata
 RUN set -eux; \\
     mkdir -p /app/vllm_source/.git; \\
     cp -a /tmp/vllm_git_metadata/. /app/vllm_source/.git/; \\
-    if grep -q '^worktree = ' /app/vllm_source/.git/config; then \\
-        sed -i 's|^worktree = .*|worktree = /app/vllm_source|' /app/vllm_source/.git/config; \\
-    else \\
-        printf '[core]\n\tworktree = /app/vllm_source\n' >> /app/vllm_source/.git/config; \\
-    fi; \\
+    if grep -q '^worktree = ' /app/vllm_source/.git/config; then \
+        sed -i 's|^worktree = .*|worktree = /app/vllm_source|' /app/vllm_source/.git/config; \
+    else \
+        printf '[core]\n\tworktree = /app/vllm_source\n' >> /app/vllm_source/.git/config; \
+    fi; \
     rm -rf /tmp/vllm_git_metadata
 
 # Copy the model files, install script, and run script
@@ -163,7 +176,11 @@ def main():
     logging.info(f"--- DeepSeek-OCR Deployment Scripter v{SCRIPT_VERSION} ---")
 
     script_dir = Path(__file__).resolve().parent
-    repo_root = script_dir.parent
+    try:
+        repo_root = find_repo_root(script_dir)
+    except RuntimeError as exc:
+        logging.error(str(exc))
+        sys.exit(1)
     install_commands_path = script_dir / INSTALL_COMMANDS_FILENAME
     install_script_path = script_dir / "install_vllm.sh"
     run_script_path = script_dir / "run_model.sh"
@@ -175,7 +192,7 @@ def main():
     try:
         create_install_script(install_commands_path, install_script_path)
         create_run_script(run_script_path, args.model_dir, args.port)
-        create_dockerfile(dockerfile_path, args.model_dir, install_script_path.name, run_script_path.name)
+        create_dockerfile(dockerfile_path, repo_root, args.model_dir, install_script_path.name, run_script_path.name)
 
         vllm_source_path = repo_root / "third_party" / "vllm"
         vllm_git_metadata_path = repo_root / ".git" / "modules" / "third_party" / "vllm"
