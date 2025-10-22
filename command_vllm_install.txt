@@ -2,6 +2,10 @@
 
 #File version v3.2
 
+# 0. Prep the env 
+apt update ; apt upgrade -y
+apt install git -y
+
 # 1. Update system and install dependencies
 apt-get update
 apt-get install -y build-essential libnuma-dev
@@ -28,7 +32,7 @@ pip install -r requirements/cpu.txt --extra-index-url https://download.pytorch.o
 
 # 0.8.5 specific build dependencies
 
-"cmake>=3.26" wheel packaging ninja "setuptools-scm>=8" "numpy<2.0" 
+pip install "cmake>=3.26" wheel packaging ninja "setuptools-scm>=8" numpy 
 
 # 7. Build the vLLM wheel
 VLLM_TARGET_DEVICE=cpu python -m build --wheel --no-isolation
